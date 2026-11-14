@@ -46,4 +46,8 @@ describe('Feature Flag & Remote Config API', () => {
         assert.equal(updated.status, 200);
         assert.equal(updated.body.enabled, false);
     });
+    it('DELETE /api/flags/:key blocks deleting core demo flags', async () => {
+        const res = await request(app).delete('/api/flags/maintenance_mode');
+        assert.equal(res.status, 403);
+    });
 });
