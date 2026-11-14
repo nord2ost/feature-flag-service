@@ -124,8 +124,27 @@ router.patch('/flags/:key', (req: Request, res: Response) => {
     res.json(formatFlag(updated));
 });
 
+const PROTECTED_KEYS = new Set([
+    'maintenance_mode',
+    'new_checkout_flow',
+    'dark_theme_default',
+    'min_app_version',
+]);
+
 router.delete('/flags/:key', (req: Request, res: Response) => {
-    const { key } = req.params;
+    const key = String(req.params.key);
+
+    // Optional API key guard (active only if ADMIN_API_KEY is configured in env)
+    const adminKey = process.env.ADMIN_API_KEY;
+    if (adminKey && req.headers['x-api-key'] !== adminKey) {
+        res.status(401).json({ error: 'Unauthorized: invalid or missing x-api-key header' });
+        return;
+    }
+
+    if (PROTECTED_KEYS.has(key)) {
+        res.status(403).json({ error: `Core demo flag "${key}" cannot be deleted` });
+        return;
+    }
     const result = db.prepare('DELETE FROM flags WHERE key = ?').run(key);
 
     if (result.changes === 0) {
