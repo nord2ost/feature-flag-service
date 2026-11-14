@@ -1,10 +1,11 @@
 import { Router, Request, Response } from 'express';
+import { EventEmitter } from 'node:events';
 import db, { FlagRow } from '../db/database.js';
 import { createFlagSchema, updateFlagSchema } from '../schemas/flag.schema.js';
 
 const router = Router();
+const flagEvents = new EventEmitter();
 
-// Helper: Convert SQLite row (enabled: 0/1, payload: JSON string) to clean API JSON
 function formatFlag(row: FlagRow) {
     return {
         id: row.id,
@@ -16,16 +17,35 @@ function formatFlag(row: FlagRow) {
     };
 }
 
-// 1. GET /api/flags — List all flags for the Admin Dashboard
+// NEW: Real-time Server-Sent Events (SSE) stream for connected clients
+router.get('/sdk/stream', (req: Request, res: Response) => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+
+    // Send an initial ping so the client knows the stream is connected
+    res.write(`data: ${JSON.stringify({ type: 'connected' })}\n\n`);
+
+    const onUpdate = () => {
+        res.write(`data: ${JSON.stringify({ type: 'config_updated', timestamp: new Date().toISOString() })}\n\n`);
+    };
+
+    flagEvents.on('updated', onUpdate);
+
+    // Clean up listener when the client closes the tab or disconnects
+    req.on('close', () => {
+        flagEvents.off('updated', onUpdate);
+    });
+});
+
 router.get('/flags', (_req: Request, res: Response) => {
     const rows = db.prepare('SELECT * FROM flags ORDER BY id ASC').all() as FlagRow[];
     res.json(rows.map(formatFlag));
 });
 
-// 2. GET /api/sdk/config — Clean key-value payload formatted for a React Native client
 router.get('/sdk/config', (_req: Request, res: Response) => {
     const rows = db.prepare('SELECT * FROM flags').all() as FlagRow[];
-
     const config: Record<string, { enabled: boolean; payload: Record<string, unknown> }> = {};
     let latestUpdate = '';
 
@@ -46,7 +66,6 @@ router.get('/sdk/config', (_req: Request, res: Response) => {
     });
 });
 
-// 3. POST /api/flags — Create a new feature flag
 router.post('/flags', (req: Request, res: Response) => {
     const parsed = createFlagSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -55,8 +74,6 @@ router.post('/flags', (req: Request, res: Response) => {
     }
 
     const { key, description, enabled, payload } = parsed.data;
-
-    // Check if key already exists
     const existing = db.prepare('SELECT id FROM flags WHERE key = ?').get(key);
     if (existing) {
         res.status(409).json({ error: `Flag with key "${key}" already exists` });
@@ -64,18 +81,18 @@ router.post('/flags', (req: Request, res: Response) => {
     }
 
     const now = new Date().toISOString();
-    const stmt = db.prepare(`
-    INSERT INTO flags (key, description, enabled, payload, updated_at)
-    VALUES (?, ?, ?, ?, ?)
-  `);
+    const result = db
+        .prepare('INSERT INTO flags (key, description, enabled, payload, updated_at) VALUES (?, ?, ?, ?, ?)')
+        .run(key, description, enabled ? 1 : 0, JSON.stringify(payload), now);
 
-    const result = stmt.run(key, description, enabled ? 1 : 0, JSON.stringify(payload), now);
     const created = db.prepare('SELECT * FROM flags WHERE id = ?').get(result.lastInsertRowid) as FlagRow;
+
+    // Notify all connected SSE clients
+    flagEvents.emit('updated');
 
     res.status(201).json(formatFlag(created));
 });
 
-// 4. PATCH /api/flags/:key — Toggle enabled state or edit payload
 router.patch('/flags/:key', (req: Request, res: Response) => {
     const { key } = req.params;
     const existing = db.prepare('SELECT * FROM flags WHERE key = ?').get(key) as FlagRow | undefined;
@@ -96,17 +113,17 @@ router.patch('/flags/:key', (req: Request, res: Response) => {
     const nextPayload = parsed.data.payload !== undefined ? JSON.stringify(parsed.data.payload) : existing.payload;
     const now = new Date().toISOString();
 
-    db.prepare(`
-    UPDATE flags
-    SET enabled = ?, description = ?, payload = ?, updated_at = ?
-    WHERE key = ?
-  `).run(nextEnabled, nextDescription, nextPayload, now, key);
+    db.prepare('UPDATE flags SET enabled = ?, description = ?, payload = ?, updated_at = ? WHERE key = ?')
+        .run(nextEnabled, nextDescription, nextPayload, now, key);
 
     const updated = db.prepare('SELECT * FROM flags WHERE key = ?').get(key) as FlagRow;
+
+    // Notify all connected SSE clients
+    flagEvents.emit('updated');
+
     res.json(formatFlag(updated));
 });
 
-// 5. DELETE /api/flags/:key — Delete a flag
 router.delete('/flags/:key', (req: Request, res: Response) => {
     const { key } = req.params;
     const result = db.prepare('DELETE FROM flags WHERE key = ?').run(key);
@@ -115,6 +132,9 @@ router.delete('/flags/:key', (req: Request, res: Response) => {
         res.status(404).json({ error: `Flag "${key}" not found` });
         return;
     }
+
+    // Notify all connected SSE clients
+    flagEvents.emit('updated');
 
     res.status(204).send();
 });
