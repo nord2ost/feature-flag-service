@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mobile Feature Flag &amp; Remote Config Service</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- React 18 & Babel Standalone (zero build step needed) -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+
+<body class="bg-slate-950 text-slate-100 min-h-screen font-sans">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useCallback } = React;
+
+    const CURRENT_APP_VERSION = '2.1.0';
+    const CORE_KEYS = ['maintenance_mode', 'new_checkout_flow', 'dark_theme_default', 'min_app_version'];
+
+    function compareVersions(v1, v2) {
+      const a = v1.split('.').map(Number);
+      const b = v2.split('.').map(Number);
+      for (let i = 0; i < Math.max(a.length, b.length); i++) {
+        if ((a[i] || 0) < (b[i] || 0)) return -1;
+        if ((a[i] || 0) > (b[i] || 0)) return 1;
+      }
+      return 0;
+    }
+
+    function useFeatureFlags() {
+      const [adminFlags, setAdminFlags] = useState([]);
+      const [sdkConfig, setSdkConfig] = useState({ flags: {} });
+      const [lastSync, setLastSync] = useState('');
+
+      const refresh = useCallback(async () => {
+        const [flagsRes, sdkRes] = await Promise.all([
+          fetch('/api/flags'),
+          fetch('/api/sdk/config'),
+        ]);
+        setAdminFlags(await flagsRes.json());
+        setSdkConfig(await sdkRes.json());
+        setLastSync(new Date().toLocaleTimeString());
+      }, []);
+
+      useEffect(() => {
+        refresh();
+
+        // Listen for real-time updates pushed from the Node.js server
+        const eventSource = new EventSource('/api/sdk/stream');
+        eventSource.onmessage = (event) => {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'config_updated') {
+            refresh();
+          }
+        };
+
+        return () => eventSource.close();
+      }, [refresh]);
+
+      return { adminFlags, sdkConfig, lastSync, refresh };
+    }
+
+    function FlagCard({ flag, onToggle, onUpdatePayload, onDelete }) {
+      const payload = flag.payload || {};
+      const [payloadText, setPayloadText] = useState(JSON.stringify(payload));
+      const isCore = CORE_KEYS.includes(flag.key);
+      const hasPayload = Object.keys(payload).length > 0;
+
+      useEffect(() => {
+        setPayloadText(JSON.stringify(flag.payload || {}));
+      }, [flag.payload]);
+
+      const handleSavePayload = () => {
+        try {
+          onUpdatePayload(flag.key, JSON.parse(payloadText));
+        } catch {
+          alert('Invalid JSON format in payload.');
+        }
+      };
+
+      return (
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col gap-3">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <code className="text-sm font-bold text-indigo-400">{flag.key}</code>
+                {isCore && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">
+                    Demo Wired
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-slate-400 mt-0.5">{flag.description}</p>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => onToggle(flag.key, !flag.enabled)}
+                aria-label={`Toggle ${flag.key}`}
+                className={`w-12 h-6 rounded-full transition-colors p-1 ${flag.enabled ? 'bg-emerald-500' : 'bg-slate-700'
+                  }`}
+              >
+                <div
+                  className={`w-4 h-4 rounded-full bg-white transition-transform ${flag.enabled ? 'translate-x-6' : 'translate-x-0'
+                    }`}
+                />
+              </button>
+              {!isCore && (
+                <button
+                  onClick={() => onDelete(flag.key)}
+                  className="text-xs text-rose-400 hover:text-rose-300"
+                >
+                  Delete
+                </button>
+              )}
+            </div>
+          </div>
+
+          {hasPayload && (
+            <div className="flex items-center gap-2 pt-2 border-t border-slate-800/80">
+              <span className="text-[11px] text-slate-500 font-mono">Payload:</span>
+              <input
+                value={payloadText}
+                onChange={(e) => setPayloadText(e.target.value)}
+                className="flex-1 bg-slate-950 border border-slate-800 rounded px-2 py-1 text-xs font-mono text-slate-300"
+              />
+              <button
+                onClick={handleSavePayload}
+                className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-xs rounded text-slate-200"
+              >
+                Update
+              </button>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function MobilePreview({ flags }) {
+      const isDark = flags.dark_theme_default?.enabled;
+      const isMaintenance = flags.maintenance_mode?.enabled;
+      const requiredVersion = flags.min_app_version?.payload?.version || '1.0.0';
+      const needsUpdate =
+        flags.min_app_version?.enabled && compareVersions(CURRENT_APP_VERSION, requiredVersion) < 0;
+
+      const customEntries = Object.entries(flags).filter(([k]) => !CORE_KEYS.includes(k));
+
+      return (
+        <section className="lg:col-span-5 flex flex-col items-center">
+          <div className="mb-3 text-center">
+            <span className="text-xs uppercase tracking-wider text-slate-400 font-semibold">
+              Live React Native Client Preview
+            </span>
+            <p className="text-xs text-slate-500">
+              Installed App Version:{' '}
+              <span className="font-mono text-slate-300">v{CURRENT_APP_VERSION}</span>
+            </p>
+          </div>
+
+          <div className="w-[320px] h-[610px] rounded-[42px] border-[10px] border-slate-800 bg-slate-900 shadow-2xl overflow-hidden flex flex-col relative">
+            <div className="w-32 h-5 bg-slate-800 rounded-b-2xl mx-auto" />
+
+            <div
+              className={`flex-1 flex flex-col p-5 transition-colors duration-300 relative overflow-y-auto ${isDark ? 'bg-slate-950 text-slate-100' : 'bg-white text-slate-900'
+                }`}
+            >
+              <div className="flex items-center justify-between pb-4 border-b border-slate-200/60">
+                <div>
+                  <p className="text-[10px] uppercase tracking-wider opacity-60 font-semibold">
+                    ShopNative Demo
+                  </p>
+                  <h3 className="font-bold text-base">Featured Gear</h3>
+                </div>
+                <span
+                  className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${isDark ? 'bg-indigo-500/20 text-indigo-300' : 'bg-slate-200 text-slate-700'
+                    }`}
+                >
+                  {isDark ? 'Dark UI' : 'Light UI'}
+                </span>
+              </div>
+
+              <div className="my-4 p-4 rounded-2xl border border-slate-200/60 bg-slate-500/5 space-y-2">
+                <div className="h-28 rounded-xl bg-gradient-to-tr from-indigo-500 to-purple-500 flex items-center justify-center text-white font-bold text-lg shadow-inner">
+                  Wireless Studio Pro
+                </div>
+                <div className="flex items-center justify-between pt-1">
+                  <span className="font-semibold text-sm">Noise Cancelling</span>
+                  <span className="font-bold text-indigo-500">$249.00</span>
+                </div>
+                <p className="text-xs opacity-70">
+                  Toggle flags on the left to test remote config updates without redeploying.
+                </p>
+              </div>
+
+              {/* Dynamic Checkout */}
+              <div className="mt-auto space-y-2">
+                {flags.new_checkout_flow?.enabled ? (
+                  <>
+                    <div className="text-center text-[11px] font-bold text-emerald-500">
+                      ✨ {flags.new_checkout_flow.payload?.discountBadge || 'EXPRESS'} Applied Automatically
+                    </div>
+                    <button className="w-full py-2.5 rounded-xl bg-black text-white font-semibold text-xs shadow-lg">
+                      Apple Pay / One-Tap Checkout
+                    </button>
+                  </>
+                ) : (
+                  <button className="w-full py-2.5 rounded-xl bg-indigo-600 text-white font-semibold text-xs">
+                    Standard Checkout (3 Steps)
+                  </button>
+                )}
+              </div>
+
+              {/* Custom Flags */}
+              {customEntries.length > 0 && (
+                <div className="mt-3 pt-3 border-t border-slate-200/40 flex flex-wrap gap-1.5">
+                  {customEntries.map(([key, val]) => (
+                    <span
+                      key={key}
+                      className={`text-[10px] px-2 py-0.5 rounded font-mono ${val.enabled ? 'bg-emerald-500/20 text-emerald-500' : 'bg-slate-500/10 opacity-50'
+                        }`}
+                    >
+                      {key}: {val.enabled ? 'ON' : 'OFF'}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Maintenance Overlay */}
+            {isMaintenance && (
+              <div className="absolute inset-0 bg-slate-950/95 text-white p-6 flex flex-col items-center justify-center text-center z-20">
+                <div className="w-12 h-12 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center text-2xl mb-3">
+                  ⚠️
+                </div>
+                <h4 className="font-bold text-lg mb-2">Under Maintenance</h4>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  {flags.maintenance_mode.payload?.message || 'Service temporarily unavailable.'}
+                </p>
+              </div>
+            )}
+
+            {/* Force Update Overlay */}
+            {needsUpdate && (
+              <div className="absolute inset-0 bg-indigo-950/95 text-white p-6 flex flex-col items-center justify-center text-center z-30">
+                <div className="w-12 h-12 rounded-full bg-indigo-500/20 text-indigo-300 flex items-center justify-center text-2xl mb-3">
+                  🚀
+                </div>
+                <h4 className="font-bold text-lg mb-2">Update Required</h4>
+                <p className="text-xs text-slate-300 leading-relaxed mb-4">
+                  Your version ({CURRENT_APP_VERSION}) is outdated. Please update to v{requiredVersion} to continue.
+                </p>
+                <button className="px-4 py-2 rounded-xl bg-white text-indigo-900 font-semibold text-xs">
+                  Open App Store
+                </button>
+              </div>
+            )}
+          </div>
+        </section>
+      );
+    }
+
+    function App() {
+      const { adminFlags, sdkConfig, lastSync, error, refresh } = useFeatureFlags();
+      const [showCreate, setShowCreate] = useState(false);
+      const [newKey, setNewKey] = useState('');
+      const [newDesc, setNewDesc] = useState('');
+
+      const patchFlag = async (key, body) => {
+        await fetch(`/api/flags/${encodeURIComponent(key)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        refresh();
+      };
+
+      const toggleFlag = (key, enabled) => patchFlag(key, { enabled });
+      const updatePayload = (key, payload) => patchFlag(key, { payload });
+
+      const deleteFlag = async (key) => {
+        await fetch(`/api/flags/${encodeURIComponent(key)}`, { method: 'DELETE' });
+        refresh();
+      };
+
+      const handleCreate = async (e) => {
+        e.preventDefault();
+        const res = await fetch('/api/flags', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key: newKey.trim(), description: newDesc.trim(), enabled: true }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          alert(err.error || 'Failed to create flag');
+          return;
+        }
+        setNewKey('');
+        setNewDesc('');
+        setShowCreate(false);
+        refresh();
+      };
+
+      return (
+        <div className="max-w-7xl mx-auto px-6 py-8">
+          <header className="flex flex-col md:flex-row md:items-end md:justify-between gap-4 pb-6 mb-8 border-b border-slate-800">
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight">Feature Flag &amp; Remote Config Service</h1>
+              <p className="text-sm text-slate-400 mt-1">Node.js + Express + TypeScript + SQLite + React</p>
+            </div>
+            <div className="flex gap-2 text-xs font-mono">
+              <a
+                href="/api/sdk/config"
+                target="_blank"
+                rel="noreferrer"
+                className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-indigo-300 hover:border-indigo-500"
+              >
+                GET /api/sdk/config ↗
+              </a>
+              <a
+                href="/api/health"
+                target="_blank"
+                rel="noreferrer"
+                className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-emerald-300 hover:border-emerald-500"
+              >
+                GET /api/health ↗
+              </a>
+            </div>
+          </header>
+
+          {error && (
+            <div className="mb-6 px-4 py-3 rounded-lg bg-rose-500/10 border border-rose-500/30 text-sm text-rose-300">
+              {error}
+            </div>
+          )}
+
+          <main className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+            <section className="lg:col-span-7 flex flex-col gap-4">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-semibold">Remote Feature Flags</h2>
+                <button
+                  onClick={() => setShowCreate(!showCreate)}
+                  className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg transition"
+                >
+                  + New Flag
+                </button>
+              </div>
+
+              {showCreate && (
+                <form
+                  onSubmit={handleCreate}
+                  className="bg-slate-900 border border-indigo-500/40 rounded-xl p-4 flex flex-col gap-3"
+                >
+                  <h3 className="text-sm font-semibold text-slate-200">Create New Flag</h3>
+                  <input
+                    required
+                    value={newKey}
+                    onChange={(e) => setNewKey(e.target.value)}
+                    placeholder="flag_key (snake_case)"
+                    className="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-indigo-500"
+                  />
+                  <input
+                    required
+                    value={newDesc}
+                    onChange={(e) => setNewDesc(e.target.value)}
+                    placeholder="Short description"
+                    className="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500"
+                  />
+                  <div className="flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowCreate(false)}
+                      className="px-3 py-1.5 text-xs text-slate-400 hover:text-white"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium rounded-lg"
+                    >
+                      Save Flag
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              <div className="flex flex-col gap-3">
+                {adminFlags.map((flag) => (
+                  <FlagCard
+                    key={flag.key}
+                    flag={flag}
+                    onToggle={toggleFlag}
+                    onUpdatePayload={updatePayload}
+                    onDelete={deleteFlag}
+                  />
+                ))}
+              </div>
+
+              <div className="mt-4 bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+                <div className="flex items-center justify-between px-4 py-2 border-b border-slate-800">
+                  <span className="text-xs font-semibold text-slate-300">
+                    Live React Native SDK Payload (/api/sdk/config)
+                  </span>
+                  <span className="text-[11px] text-slate-500">Synced {lastSync}</span>
+                </div>
+                <pre className="p-4 text-[11px] font-mono text-emerald-300 overflow-x-auto max-h-80">
+                  {JSON.stringify(sdkConfig, null, 2)}
+                </pre>
+              </div>
+            </section>
+
+            <MobilePreview flags={sdkConfig.flags || {}} />
+          </main>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
