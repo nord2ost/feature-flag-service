@@ -2,10 +2,16 @@
 
 A lightweight, real-time **Feature Flag & Remote Config backend** built with **Node.js, Express, TypeScript, SQLite, and Zod**, paired with an interactive React dashboard and live mobile client preview.
 
-🔗 **Live Interactive Demo:** [Add your Render/Railway URL here]
+🔗 **Live Interactive Demo:** https://feature-flag-service-9w2g.onrender.com
+
+Expo app to check on the phone. Toggle changes on web, see change in app.
+<img width="450" height="450" alt="expo-qr" src="https://github.com/user-attachments/assets/eb16a4c7-13e1-4482-aa59-71a7d6a76be1" />
+🔗 https://feature-flag-mobile.expo.app
 
 ## Why I Built This
-In mobile development (React Native), shipping a binary update through the App Store or Google Play takes days. I built this service to solve real mobile release bottlenecks—allowing teams to toggle features, roll out UI changes, enforce minimum app versions, or trigger maintenance screens over-the-air in milliseconds.
+Upon conducting interviews I noticed that many Software Engineers do not know or understand how powerful feature flags are as a tool for modern software engineering. Beyond controlling app on the fly, they also fit perfectly with trunk-based development, as they allow continuous integration, but hide features under construction from users.
+
+So I built this service as a demo of how to solve real mobile release bottlenecks—allowing teams to toggle features, roll out UI changes, enforce minimum app versions, or trigger maintenance screens over-the-air in milliseconds.
 
 ## Key Engineering Highlights
 * **Real-Time Server-Sent Events (SSE):** Exposes `GET /api/sdk/stream` using Node's native `EventEmitter` so connected clients receive config updates instantaneously without polling overhead.
