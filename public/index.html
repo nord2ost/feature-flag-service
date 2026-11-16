@@ -259,6 +259,30 @@
               </div>
             )}
           </div>
+          {/* OR: Test on a Real Physical Device via Expo Go */}
+          <div className="mt-6 w-[320px] bg-slate-900 border border-slate-800 rounded-2xl p-4 flex items-center gap-4">
+            <img
+              src="/expo-qr.png"
+              alt="Scan with Expo Go"
+              className="w-20 h-20 rounded-xl bg-white p-1.5 shrink-0"
+            />
+            <div className="space-y-1">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-400">
+                Or Test on Your Phone
+              </span>
+              <p className="text-xs text-slate-300 leading-snug">
+                Scan with <span className="font-semibold text-white">Expo Go</span> to control a real React Native app live.
+              </p>
+              <a
+                href="https://feature-flag-mobile.expo.app"
+                target="_blank"
+                rel="noreferrer"
+                className="inline-block text-[11px] text-emerald-400 hover:underline font-mono"
+              >
+                Open Expo Link ↗
+              </a>
+            </div>
+          </div>
         </section>
       );
     }
